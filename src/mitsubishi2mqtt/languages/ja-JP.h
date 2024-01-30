@@ -83,6 +83,7 @@ const char txt_status_mqtt[] PROGMEM = "MQTT";
 const char txt_status_wifi[] PROGMEM = "WIFI RSSI";
 const char txt_status_connect[] PROGMEM = "接続中";
 const char txt_status_disconnect[] PROGMEM = "切断中";
+const char txt_status_uptime[] PROGMEM = "Uptime";
 
 //Page WIFI
 const char txt_wifi_title[] PROGMEM = "WIFI設定";

@@ -83,6 +83,7 @@ const char txt_status_mqtt[] PROGMEM = "Stato MQTT";
 const char txt_status_wifi[] PROGMEM = "WIFI RSSI";
 const char txt_status_connect[] PROGMEM = "CONNESSO";
 const char txt_status_disconnect[] PROGMEM = "DISCONNESSO";
+const char txt_status_uptime[] PROGMEM = "Uptime";
 
 //Page WIFI
 const char txt_wifi_title[] PROGMEM = "Parametri WIFI";

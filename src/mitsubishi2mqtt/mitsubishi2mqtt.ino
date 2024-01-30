@@ -1,3 +1,6 @@
+#include <ArduinoJson.h>
+#include <ArduinoJson.hpp>
+
 /*
   mitsubishi2mqtt - Mitsubishi Heat Pump to MQTT control for Home Assistant.
   Copyright (c) 2022 gysmo38, dzungpv, shampeon, endeavour, jascdk, chrdavis, alekslyse.  All right reserved.
@@ -54,6 +57,16 @@ ESP8266WebServer server(80);  // ESP8266 web
   #include INCLUDE_FILE(MY_LANGUAGE)
 #endif
 
+#define DEBUG 1
+
+#if DEBUG
+#define d_print(X)   Serial.print(X)
+#define d_println(X) Serial.println(X)
+#else
+#define d_print(X)
+#define d_println(X)
+#endif
+
 // wifi, mqtt and heatpump client instances
 WiFiClient espClient;
 PubSubClient mqtt_client(espClient);
@@ -77,6 +90,14 @@ unsigned long lastHpSync;
 unsigned int hpConnectionRetries;
 unsigned int hpConnectionTotalRetries;
 unsigned long lastRemoteTemp;
+
+// STATS
+unsigned int wifi_timeouts = 0;
+unsigned int mqtt_connect_calls = 0;
+
+#define MQTT_STATUS_LIST_N 4
+int mqtt_status_list[MQTT_STATUS_LIST_N] = { };
+int mqtt_status_list_idx = 0;
 
 //Local state
 StaticJsonDocument<JSON_OBJECT_SIZE(12)> rootInfo;
@@ -824,8 +845,12 @@ void handleStatus() {
   statusPage.replace("_TXT_STATUS_TITLE_", FPSTR(txt_status_title));
   statusPage.replace("_TXT_STATUS_HVAC_", FPSTR(txt_status_hvac));
   statusPage.replace("_TXT_STATUS_MQTT_", FPSTR(txt_status_mqtt));
+  statusPage.replace("_TXT_DEBUG_MQTT_", F("MQTT DEBUG"));
   statusPage.replace("_TXT_STATUS_WIFI_", FPSTR(txt_status_wifi));
+  statusPage.replace("_TXT_TIMEOUTS_WIFI_", F("WIFI TIMEOUTS"));
   statusPage.replace("_TXT_RETRIES_HVAC_", FPSTR(txt_retries_hvac));
+  statusPage.replace("_TXT_STATUS_UPTIME_", FPSTR(txt_status_uptime));
+  statusPage.replace("_TXT_VERSION_", F("VERSION"));
 
   if (server.hasArg("mrconn")) mqttConnect();
 
@@ -837,13 +862,29 @@ void handleStatus() {
   disconnected += FPSTR(txt_status_disconnect);
   disconnected += F("</b></span>");
 
+  String tmp;
+  tmp.reserve(32);
+  tmp += "conn=";
+  tmp += mqtt_connect_calls;
+  tmp += " sts=[";
+  for (int i = 0; i < MQTT_STATUS_LIST_N; i++) {
+      tmp += mqtt_status_list[i];
+      if (i+1 < MQTT_STATUS_LIST_N)
+          tmp += ",";
+  }
+  tmp += "]";
+
   if ((Serial) and hp.isConnected()) statusPage.replace(F("_HVAC_STATUS_"), connected);
   else  statusPage.replace(F("_HVAC_STATUS_"), disconnected);
   if (mqtt_client.connected()) statusPage.replace(F("_MQTT_STATUS_"), connected);
   else statusPage.replace(F("_MQTT_STATUS_"), disconnected);
+  statusPage.replace(F("_MQTT_DEBUG_"), tmp);
   statusPage.replace(F("_HVAC_RETRIES_"), String(hpConnectionTotalRetries));
   statusPage.replace(F("_MQTT_REASON_"), String(mqtt_client.state()));
   statusPage.replace(F("_WIFI_STATUS_"), String(WiFi.RSSI()));
+  statusPage.replace(F("_WIFI_TIMEOUTS_"), String(wifi_timeouts));
+  statusPage.replace(F("_UPTIME_STATUS_"), String(millis() / 1000));
+  statusPage.replace(F("_VERSION_STR_"), m2mqtt_version);
   sendWrappedHTML(statusPage);
 }
 
@@ -1306,6 +1347,8 @@ void hpSettingsChanged() {
   String mqttOutput;
   serializeJson(rootInfo, mqttOutput);
 
+  d_println(F("hpSettingsChanged"));
+
   if (!mqtt_client.publish(ha_settings_topic.c_str(), mqttOutput.c_str(), true)) {
     if (_debugModeLogs) mqtt_client.publish(ha_debug_logs_topic.c_str(), (char*)("Failed to publish hp settings"));
   }
@@ -1406,6 +1449,8 @@ void hpPacketDebug(byte* packet, unsigned int length, const char* packetDirectio
     root[packetDirection] = message;
     String mqttOutput;
     serializeJson(root, mqttOutput);
+    d_println(F("hpPacketDebug"));
+
     if (!mqtt_client.publish(ha_debug_pckts_topic.c_str(), mqttOutput.c_str())) {
       mqtt_client.publish(ha_debug_logs_topic.c_str(), (char*)("Failed to publish to heatpump/debug topic"));
     }
@@ -1419,6 +1464,8 @@ void hpSendLocalState() {
   String mqttOutput;
   serializeJson(rootInfo, mqttOutput);
   mqtt_client.publish(ha_debug_pckts_topic.c_str(),  mqttOutput.c_str(), false);
+  d_println(F("hpSendLocalState"));
+
   if (!mqtt_client.publish_P(ha_state_topic.c_str(), mqttOutput.c_str(), false)) {
     if (_debugModeLogs) mqtt_client.publish(ha_debug_logs_topic.c_str(), (char*)("Failed to publish dummy hp status change"));
   }
@@ -1656,7 +1703,24 @@ void mqttConnect() {
   int attempts = 0;
   while (!mqtt_client.connected()) {
     // Attempt to connect
+
+      mqtt_connect_calls++;
+      mqtt_status_list[mqtt_status_list_idx++] = mqtt_client.state();
+      if (mqtt_status_list_idx >= MQTT_STATUS_LIST_N)
+          mqtt_status_list_idx = 0;
+
+    d_print(F("mqttConnect: pre loop="));
+    d_print(attempts);
+    d_print(F(" state="));
+    d_println(mqtt_client.state());
+
     mqtt_client.connect(mqtt_client_id.c_str(), mqtt_username.c_str(), mqtt_password.c_str(), ha_availability_topic.c_str(), 1, true, mqtt_payload_unavailable);
+
+    d_print(F("mqttConnect: post loop="));
+    d_print(attempts);
+    d_print(F(" state="));
+    d_println(mqtt_client.state());
+
     // If state < 0 (MQTT_CONNECTED) => network problem we retry 5 times and then waiting for MQTT_RETRY_INTERVAL_MS and retry reapeatly
     if (mqtt_client.state() < MQTT_CONNECTED) {
       if (attempts == 5) {
@@ -1684,7 +1748,9 @@ void mqttConnect() {
       mqtt_client.subscribe(ha_wideVane_set_topic.c_str());
       mqtt_client.subscribe(ha_remote_temp_set_topic.c_str());
       mqtt_client.subscribe(ha_custom_packet.c_str());
-      mqtt_client.publish(ha_availability_topic.c_str(), mqtt_payload_available, true); //publish status as available
+      d_print("mqttConnect: we are connected\n");
+
+      mqtt_client.publish(ha_availability_topic.c_str(), mqtt_payload_available, true);  //publish status as available
       if (others_haa) {
         haConfig();
       }
@@ -1824,6 +1890,7 @@ void loop() {
   if (WiFi.getMode() == WIFI_STA and WiFi.status() == WL_CONNECTED) {
 	  wifi_timeout = millis() + WIFI_RETRY_INTERVAL_MS;
   } else if (wifi_config_exists and millis() > wifi_timeout) {
+	  wifi_timeouts++;
 	  ESP.restart();
   }
 
