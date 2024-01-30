@@ -1642,8 +1642,9 @@ void haConfig() {
   haConfigDevice["mdl"]   = "HVAC MITSUBISHI";
   haConfigDevice["mf"]    = "MITSUBISHI ELECTRIC";
   haConfigDevice["configuration_url"]    = "http://"+WiFi.localIP().toString();
-  
+
   String mqttOutput;
+  mqttOutput.reserve(capacity);
   serializeJson(haConfig, mqttOutput);
   mqtt_client.beginPublish(ha_config_topic.c_str(), mqttOutput.length(), true);
   mqtt_client.print(mqttOutput);
