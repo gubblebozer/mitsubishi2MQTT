@@ -1701,6 +1701,7 @@ bool connectWifi() {
     WiFi.mode(WIFI_STA);
     delay(10);
   }
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
 #ifdef ESP32
   WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
 #endif
